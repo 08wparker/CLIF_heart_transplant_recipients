@@ -80,6 +80,30 @@ Marimo's reactivity means:
 - Don't add comments in cells that use mo.sql()
 </sql>
 
+## Variable Tracking (CRITICAL)
+
+**Marimo does not allow variable redefinition across cells.** To avoid errors:
+
+1. **Maintain a variable reference** at the top of each notebook as a comment block
+2. **Check the reference before creating new variables** to avoid naming conflicts
+3. **Use underscore prefix** (`_my_var`) for cell-local variables that don't need to be shared
+4. **Use descriptive, unique names** - e.g., `transplant_hosp_ids` instead of generic `hosp_ids`
+
+Example variable reference block:
+```python
+# =============================================================================
+# VARIABLE REFERENCE - All exported variables (do not redefine across cells!)
+# =============================================================================
+# IMPORTS: mo, pl, pd, np, Path, alt
+# CONFIG: data_dir, filetype, timezone
+# DATA: patient_df, labs_df, vitals_df
+# DERIVED: filtered_data, hourly_stats, final_results
+# UI: date_selector, patient_dropdown
+# =============================================================================
+```
+
+**Update this reference whenever you add new exported variables.**
+
 ## Troubleshooting
 
 Common issues and solutions:
@@ -87,6 +111,7 @@ Common issues and solutions:
 - Circular dependencies: Reorganize code to remove cycles in the dependency graph
 - UI element value access: Move access to a separate cell from definition
 - Visualization not showing: Ensure the visualization object is the last expression
+- **Variable redefinition error**: Check the variable reference, rename conflicting variables
 
 After generating a notebook, run `marimo check --fix` to catch and
 automatically resolve common formatting issues, and detect common pitfalls.

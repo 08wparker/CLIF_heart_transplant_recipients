@@ -8,8 +8,10 @@ app = marimo.App(width="columns")
 def _():
     import marimo as mo
     import polars as pl
+    import pandas as pd
+    import numpy as np
     from pathlib import Path
-    return Path, mo
+    return Path, mo, np, pd
 
 
 @app.cell
@@ -460,7 +462,7 @@ def _(hospitalization, mo, patient, transplant_times):
     | Transplants identified (1g methylpred) | **{n_transplants}** |
     | Coverage | **{n_transplants / n_patients * 100:.1f}%** of patients |
     """)
-    return
+    return (n_patients,)
 
 
 @app.cell
@@ -484,10 +486,10 @@ def _(steroids, transplant_times):
 @app.cell
 def _(mo, steroids_transplant):
     # Dropdown to select hospitalization
-    hosp_ids = sorted(steroids_transplant["hospitalization_id"].unique())
+    _hosp_list = sorted(steroids_transplant["hospitalization_id"].unique())
     hosp_selector = mo.ui.dropdown(
-        options=hosp_ids,
-        value=hosp_ids[0],
+        options=_hosp_list,
+        value=_hosp_list[0],
         label="Select Hospitalization"
     )
     hosp_selector
@@ -672,6 +674,153 @@ def _(alt, hourly_mean):
     )
 
     inotrope_chart_mean
+    return
+
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## Patient-Level Imputed Inotrope Dataset
+
+    Create a dataset with 72 hourly observations per patient using LOCF imputation.
+    - If MAR action is "not given", dose = 0
+    - Use LOCF to fill missing hours
+    """)
+    return
+
+
+@app.cell
+def _(medication_continuous):
+    # Check columns in continuous medication table
+    medication_continuous.df.columns.tolist()
+    return
+
+
+@app.cell
+def _(medication_continuous):
+    # Check MAR action categories
+    if "mar_action_category" in medication_continuous.df.columns:
+        mar_actions = sorted(medication_continuous.df["mar_action_category"].dropna().unique())
+    else:
+        mar_actions = "Column not found"
+    mar_actions
+    return
+
+
+@app.cell
+def _(medication_continuous, np, post_transplant_icu):
+    # Get all hospitalization IDs with transplants
+    transplant_hosp_ids = post_transplant_icu["hospitalization_id"].unique()
+
+    # Filter inotropes and merge with ICU times
+    inotropes_raw = medication_continuous.df[
+        medication_continuous.df["med_category"].isin(["dopamine", "dobutamine"])
+    ].copy()
+
+    inotropes_raw = inotropes_raw.merge(
+        post_transplant_icu[["hospitalization_id", "post_transplant_ICU_in_dttm"]],
+        on="hospitalization_id"
+    )
+
+    # Calculate hours from ICU and create hour bin
+    inotropes_raw["hours_from_icu"] = (
+        (inotropes_raw["admin_dttm"] - inotropes_raw["post_transplant_ICU_in_dttm"])
+        .dt.total_seconds() / 3600
+    )
+    inotropes_raw["hour_bin"] = inotropes_raw["hours_from_icu"].apply(lambda x: int(x) if x >= 0 else -1)
+
+    # Filter to 0-71 hours
+    inotropes_raw = inotropes_raw[(inotropes_raw["hour_bin"] >= 0) & (inotropes_raw["hour_bin"] < 72)]
+
+    # Handle MAR action - if "not given" or similar, set dose to 0
+    if "mar_action_category" in inotropes_raw.columns:
+        inotropes_raw["effective_dose"] = np.where(
+            inotropes_raw["mar_action_category"].str.lower().str.contains("not given|held|stopped", na=False),
+            0,
+            inotropes_raw["med_dose"]
+        )
+    else:
+        inotropes_raw["effective_dose"] = inotropes_raw["med_dose"]
+
+    inotropes_raw[["hospitalization_id", "hour_bin", "med_category", "med_dose", "effective_dose"]].head(20)
+    return inotropes_raw, transplant_hosp_ids
+
+
+@app.cell
+def _(inotropes_raw, pd, transplant_hosp_ids):
+    # Create skeleton: all patients x 72 hours x 2 medications
+    hours = list(range(72))
+    meds = ["dopamine", "dobutamine"]
+
+    skeleton = pd.DataFrame([
+        {"hospitalization_id": h, "hour_bin": hr, "med_category": med}
+        for h in transplant_hosp_ids
+        for hr in hours
+        for med in meds
+    ])
+
+    # Calculate mean effective dose per patient-hour-medication from raw data
+    hourly_doses = (
+        inotropes_raw
+        .groupby(["hospitalization_id", "hour_bin", "med_category"])["effective_dose"]
+        .mean()
+        .reset_index()
+        .rename(columns={"effective_dose": "avg_dose"})
+    )
+
+    # Merge with skeleton
+    patient_hourly = skeleton.merge(hourly_doses, on=["hospitalization_id", "hour_bin", "med_category"], how="left")
+
+    # LOCF imputation within each patient-medication group
+    patient_hourly = patient_hourly.sort_values(["hospitalization_id", "med_category", "hour_bin"])
+    patient_hourly["avg_dose_locf"] = (
+        patient_hourly
+        .groupby(["hospitalization_id", "med_category"])["avg_dose"]
+        .ffill()
+    )
+
+    # Fill remaining NaN (before first observation) with 0
+    patient_hourly["avg_dose_locf"] = patient_hourly["avg_dose_locf"].fillna(0)
+
+    patient_hourly
+    return (patient_hourly,)
+
+
+@app.cell
+def _(patient_hourly):
+    # Pivot to wide format: one row per patient-hour, columns for each medication
+    inotrope_wide = patient_hourly.pivot_table(
+        index=["hospitalization_id", "hour_bin"],
+        columns="med_category",
+        values="avg_dose_locf"
+    ).reset_index()
+
+    inotrope_wide.columns.name = None
+    inotrope_wide = inotrope_wide.rename(columns={
+        "dopamine": "dopamine_dose",
+        "dobutamine": "dobutamine_dose"
+    })
+
+    inotrope_wide
+    return (inotrope_wide,)
+
+
+@app.cell
+def _(inotrope_wide, mo, n_patients):
+    n_patients_ino= inotrope_wide["hospitalization_id"].nunique()
+    n_rows = len(inotrope_wide)
+    expected_rows = n_patients * 72
+
+    mo.md(f"""
+    ### Imputed Dataset Summary
+
+    | Metric | Value |
+    |--------|-------|
+    | Patients | **{n_patients_ino}** |
+    | Rows | **{n_rows}** |
+    | Expected (patients × 72h) | **{expected_rows}** |
+    | Match | **{"✓" if n_rows == expected_rows else "✗"}** |
+    """)
     return
 
 
