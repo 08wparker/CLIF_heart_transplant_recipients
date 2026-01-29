@@ -1,0 +1,10 @@
+[project]
+name = "clif-heart-transplant"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.10"
+dependencies = [
+    "altair>=6.0.0",
+    "clifpy>=0.3.8",
+    "marimo>=0.19.6",
+]
