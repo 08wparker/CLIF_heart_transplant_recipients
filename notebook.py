@@ -747,7 +747,7 @@ def _(mo):
     mo.md("""
     ## Inotrope Analysis: Dopamine & Dobutamine
 
-    Plot median hourly dose for first 72 hours after ICU admission.
+    Plot median hourly dose for first week (168 hours) after ICU admission.
     """)
     return
 
@@ -779,14 +779,14 @@ def _(medication_continuous, post_transplant_icu):
         .dt.total_seconds() / 3600
     )
 
-    # Filter to first 72 hours
-    inotropes_72h = inotropes[
-        (inotropes["hours_from_icu"] >= 0) & (inotropes["hours_from_icu"] <= 72)
+    # Filter to first week (168 hours)
+    inotropes_168h = inotropes[
+        (inotropes["hours_from_icu"] >= 0) & (inotropes["hours_from_icu"] <= 168)
     ].copy()
 
     # Create hour bins
-    inotropes_72h["hour_bin"] = inotropes_72h["hours_from_icu"].astype(int)
-    inotropes_72h
+    inotropes_168h["hour_bin"] = inotropes_168h["hours_from_icu"].astype(int)
+    inotropes_168h
     return
 
 
@@ -813,7 +813,7 @@ def _(alt, hourly_mean_imputed):
         color=alt.Color("med_category:N", title="Medication"),
         tooltip=["hour_bin:Q", "med_category:N", alt.Tooltip("mean_dose:Q", format=".2f")]
     ).properties(
-        title="Mean Hourly Vasoactive Medication Dose - First 72h Post-ICU",
+        title="Mean Hourly Vasoactive Medication Dose - First Week Post-ICU",
         width=800,
         height=400
     )
@@ -845,7 +845,7 @@ def _(alt, hourly_median_imputed):
         color=alt.Color("med_category:N", title="Medication"),
         tooltip=["hour_bin:Q", "med_category:N", alt.Tooltip("median_dose:Q", format=".3f")]
     ).properties(
-        title="Median Hourly Vasoactive Medication Dose - First 72h Post-ICU",
+        title="Median Hourly Vasoactive Medication Dose - First Week Post-ICU",
         width=800,
         height=400
     )
@@ -891,7 +891,7 @@ def _(alt, hourly_counts):
             alt.Tooltip("n_total:Q", title="N Total")
         ]
     ).properties(
-        title="Percentage of Patients on Vasoactive Medications - First 72h Post-ICU",
+        title="Percentage of Patients on Vasoactive Medications - First Week Post-ICU",
         width=800,
         height=400
     )
@@ -905,7 +905,7 @@ def _(mo):
     mo.md("""
     ## Patient-Level Imputed Inotrope Dataset
 
-    Create a dataset with 72 hourly observations per patient using LOCF imputation.
+    Create a dataset with 168 hourly observations (1 week) per patient using LOCF imputation.
     - If MAR action is "not given", dose = 0
     - Use LOCF to fill missing hours
     """)
@@ -965,8 +965,8 @@ def _(medication_continuous, np, post_transplant_icu, vasoactive_meds):
     )
     vasoactive_raw["hour_bin"] = vasoactive_raw["hours_from_icu"].apply(lambda x: int(x) if x >= 0 else -1)
 
-    # Filter to 0-71 hours
-    vasoactive_raw = vasoactive_raw[(vasoactive_raw["hour_bin"] >= 0) & (vasoactive_raw["hour_bin"] < 72)]
+    # Filter to first week (0-167 hours)
+    vasoactive_raw = vasoactive_raw[(vasoactive_raw["hour_bin"] >= 0) & (vasoactive_raw["hour_bin"] < 168)]
 
     # Handle MAR action - if "not given" or similar, set dose to 0
     if "mar_action_category" in vasoactive_raw.columns:
@@ -984,8 +984,8 @@ def _(medication_continuous, np, post_transplant_icu, vasoactive_meds):
 
 @app.cell
 def _(pd, transplant_hosp_ids, vasoactive_meds, vasoactive_raw):
-    # Create skeleton: all patients x 72 hours x all vasoactive medications
-    hours = list(range(72))
+    # Create skeleton: all patients x 168 hours (1 week) x all vasoactive medications
+    hours = list(range(168))
 
     skeleton = pd.DataFrame([
         {"hospitalization_id": h, "hour_bin": hr, "med_category": med}
@@ -1056,7 +1056,7 @@ def _(patient_hourly):
 def _(mo, n_patients, vasoactive_wide):
     n_patients_vaso = vasoactive_wide["hospitalization_id"].nunique()
     n_rows_vaso = len(vasoactive_wide)
-    expected_rows_vaso = n_patients * 72
+    expected_rows_vaso = n_patients * 168
 
     mo.md(f"""
     ### Imputed Vasoactive Dataset Summary
@@ -1065,7 +1065,7 @@ def _(mo, n_patients, vasoactive_wide):
     |--------|-------|
     | Patients | **{n_patients_vaso}** |
     | Rows | **{n_rows_vaso}** |
-    | Expected (patients × 72h) | **{expected_rows_vaso}** |
+    | Expected (patients × 168h) | **{expected_rows_vaso}** |
     | Match | **{"✓" if n_rows_vaso == expected_rows_vaso else "✗"}** |
     """)
     return
