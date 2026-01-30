@@ -408,12 +408,22 @@ def _(medication_intermittent):
 
 @app.cell
 def _(medication_intermittent):
-    # Filter to steroids only (using pandas syntax)
+    # Filter to methylprednisolone
     steroids = medication_intermittent.df[
         medication_intermittent.df["med_category"] == "methylprednisolone"
     ]
     steroids
     return (steroids,)
+
+
+@app.cell
+def _(medication_intermittent):
+    # Filter to prednisone (patients transition from methylpred to prednisone)
+    prednisone = medication_intermittent.df[
+        medication_intermittent.df["med_category"] == "prednisone"
+    ]
+    prednisone
+    return (prednisone,)
 
 
 @app.cell
@@ -580,12 +590,21 @@ def _(mo):
 
 
 @app.cell
-def _(adt, adt_hosp_selector, adt_time_range, alt, steroids, transplant_times):
+def _(
+    adt,
+    adt_hosp_selector,
+    adt_time_range,
+    alt,
+    prednisone,
+    steroids,
+    transplant_times,
+):
     _selected_hosp = adt_hosp_selector.value
     _time_min, _time_max = adt_time_range.value
 
     _adt_data = adt.df[adt.df["hospitalization_id"] == _selected_hosp].copy()
     _steroid_data = steroids[steroids["hospitalization_id"] == _selected_hosp].copy()
+    _prednisone_data = prednisone[prednisone["hospitalization_id"] == _selected_hosp].copy()
     _transplant_time = transplant_times[
         transplant_times["hospitalization_id"] == _selected_hosp
     ]["transplant_cross_clamp"].iloc[0]
@@ -599,6 +618,9 @@ def _(adt, adt_hosp_selector, adt_time_range, alt, steroids, transplant_times):
     _steroid_data["hours_from_transplant"] = (
         (_steroid_data["admin_dttm"] - _transplant_time).dt.total_seconds() / 3600
     )
+    _prednisone_data["hours_from_transplant"] = (
+        (_prednisone_data["admin_dttm"] - _transplant_time).dt.total_seconds() / 3600
+    )
 
     # Filter to time range (keep ADT if it overlaps with the window)
     _adt_data = _adt_data[
@@ -609,12 +631,16 @@ def _(adt, adt_hosp_selector, adt_time_range, alt, steroids, transplant_times):
         (_steroid_data["hours_from_transplant"] >= _time_min) &
         (_steroid_data["hours_from_transplant"] <= _time_max)
     ]
+    _prednisone_data = _prednisone_data[
+        (_prednisone_data["hours_from_transplant"] >= _time_min) &
+        (_prednisone_data["hours_from_transplant"] <= _time_max)
+    ]
 
     _location_order = ["or", "icu", "ward", "stepdown", "pacu", "ed", "procedural", "other"]
     _existing_locations = [loc for loc in _location_order if loc in _adt_data["location_category"].unique()]
     _other_locations = [loc for loc in _adt_data["location_category"].unique() if loc not in _location_order]
     _all_locations = _existing_locations + _other_locations
-    _all_locations.append("methylpred")
+    _all_locations.extend(["methylpred", "prednisone"])
 
     _x_scale = alt.Scale(domain=[_time_min, _time_max])
 
@@ -642,7 +668,25 @@ def _(adt, adt_hosp_selector, adt_time_range, alt, steroids, transplant_times):
     ).encode(
         x=alt.X("hours_from_transplant:Q", scale=_x_scale),
         y=alt.Y("location_category:N", sort=_all_locations),
-        color=alt.Color("med_dose:Q", scale=alt.Scale(scheme="reds"), title="Dose (mg)"),
+        color=alt.Color("med_dose:Q", scale=alt.Scale(scheme="reds"), title="Methylpred (mg)"),
+        tooltip=[
+            alt.Tooltip("admin_dttm:T", title="Admin Time"),
+            alt.Tooltip("med_dose:Q", title="Dose (mg)"),
+            alt.Tooltip("hours_from_transplant:Q", title="Hours", format=".1f")
+        ]
+    )
+
+    _prednisone_plot_data = _prednisone_data.copy()
+    _prednisone_plot_data["location_category"] = "prednisone"
+
+    _prednisone_points = alt.Chart(_prednisone_plot_data).mark_point(
+        size=100,
+        shape="circle",
+        filled=True
+    ).encode(
+        x=alt.X("hours_from_transplant:Q", scale=_x_scale),
+        y=alt.Y("location_category:N", sort=_all_locations),
+        color=alt.Color("med_dose:Q", scale=alt.Scale(scheme="blues"), title="Prednisone (mg)"),
         tooltip=[
             alt.Tooltip("admin_dttm:T", title="Admin Time"),
             alt.Tooltip("med_dose:Q", title="Dose (mg)"),
@@ -659,12 +703,13 @@ def _(adt, adt_hosp_selector, adt_time_range, alt, steroids, transplant_times):
     _combined_chart = alt.layer(
         _adt_bars,
         _steroid_points,
+        _prednisone_points,
         _transplant_rule
     ).properties(
-        title=f"ADT Timeline with Methylprednisolone - {_selected_hosp}",
+        title=f"ADT Timeline with Steroids - {_selected_hosp}",
         width=800,
-        height=350
-    )
+        height=400
+    ).resolve_scale(color='independent')
 
     _combined_chart
     return
