@@ -813,8 +813,8 @@ def _(alt, hourly_mean_imputed):
         color=alt.Color("med_category:N", title="Medication"),
         tooltip=["hour_bin:Q", "med_category:N", alt.Tooltip("mean_dose:Q", format=".2f")]
     ).properties(
-        title="Mean Hourly Dopamine & Dobutamine - First 72h Post-ICU (Imputed)",
-        width=700,
+        title="Mean Hourly Vasoactive Medication Dose - First 72h Post-ICU",
+        width=800,
         height=400
     )
 
@@ -838,15 +838,15 @@ def _(patient_hourly):
 
 @app.cell
 def _(alt, hourly_median_imputed):
-    # Plot median hourly dopamine and dobutamine from imputed data
+    # Plot median hourly vasoactive medication doses
     inotrope_chart_median = alt.Chart(hourly_median_imputed).mark_line(point=True).encode(
         x=alt.X("hour_bin:Q", title="Hours from ICU Admission"),
-        y=alt.Y("median_dose:Q", title="Median Dose (mcg/kg/min)"),
+        y=alt.Y("median_dose:Q", title="Median Dose"),
         color=alt.Color("med_category:N", title="Medication"),
-        tooltip=["hour_bin:Q", "med_category:N", alt.Tooltip("median_dose:Q", format=".2f")]
+        tooltip=["hour_bin:Q", "med_category:N", alt.Tooltip("median_dose:Q", format=".3f")]
     ).properties(
-        title="Median Hourly Dopamine & Dobutamine - First 72h Post-ICU (Imputed)",
-        width=700,
+        title="Median Hourly Vasoactive Medication Dose - First 72h Post-ICU",
+        width=800,
         height=400
     )
 
@@ -856,18 +856,18 @@ def _(alt, hourly_median_imputed):
 
 @app.cell
 def _(patient_hourly):
-    # Calculate percentage of patients on each inotrope per hour
-    # A patient is "on" an inotrope if dose > 0
+    # Calculate percentage of patients on each medication per hour
+    # A patient is "on" a medication if dose > 0
     patient_hourly_on = patient_hourly.copy()
-    patient_hourly_on["on_inotrope"] = patient_hourly_on["avg_dose_locf"] > 0
+    patient_hourly_on["on_med"] = patient_hourly_on["avg_dose_locf"] > 0
 
     # Count patients on each medication per hour
     hourly_counts = (
         patient_hourly_on
         .groupby(["hour_bin", "med_category"])
         .agg(
-            n_on=("on_inotrope", "sum"),
-            n_total=("on_inotrope", "count")
+            n_on=("on_med", "sum"),
+            n_total=("on_med", "count")
         )
         .reset_index()
     )
@@ -878,10 +878,10 @@ def _(patient_hourly):
 
 @app.cell
 def _(alt, hourly_counts):
-    # Plot percentage of patients on each inotrope
-    inotrope_pct_chart = alt.Chart(hourly_counts).mark_line(point=True).encode(
+    # Plot percentage of patients on each vasoactive medication
+    vasoactive_pct_chart = alt.Chart(hourly_counts).mark_line(point=True).encode(
         x=alt.X("hour_bin:Q", title="Hours from ICU Admission"),
-        y=alt.Y("pct_on:Q", title="% Patients on Inotrope"),
+        y=alt.Y("pct_on:Q", title="% Patients on Medication"),
         color=alt.Color("med_category:N", title="Medication"),
         tooltip=[
             "hour_bin:Q",
@@ -891,12 +891,12 @@ def _(alt, hourly_counts):
             alt.Tooltip("n_total:Q", title="N Total")
         ]
     ).properties(
-        title="Percentage of Patients on Dopamine/Dobutamine - First 72h Post-ICU",
-        width=700,
+        title="Percentage of Patients on Vasoactive Medications - First 72h Post-ICU",
+        width=800,
         height=400
     )
 
-    inotrope_pct_chart
+    vasoactive_pct_chart
     return
 
 
@@ -931,60 +931,72 @@ def _(medication_continuous):
 
 
 @app.cell
-def _(medication_continuous, np, post_transplant_icu):
-    # Get all hospitalization IDs with post-transplant ICU data
-    inotrope_hosp_ids = post_transplant_icu["hospitalization_id"].unique()
+def _():
+    # Define vasoactive medications to track
+    vasoactive_meds = [
+        "dopamine",
+        "dobutamine",
+        "epinephrine",
+        "norepinephrine",
+        "vasopressin",
+        "milrinone",
+        "nitric_oxide"
+    ]
+    vasoactive_meds
+    return (vasoactive_meds,)
 
-    # Filter inotropes and merge with ICU times
-    inotropes_raw = medication_continuous.df[
-        medication_continuous.df["med_category"].isin(["dopamine", "dobutamine"])
+
+@app.cell
+def _(medication_continuous, np, post_transplant_icu, vasoactive_meds):
+    # Filter vasoactive medications and merge with ICU times
+    vasoactive_raw = medication_continuous.df[
+        medication_continuous.df["med_category"].isin(vasoactive_meds)
     ].copy()
 
-    inotropes_raw = inotropes_raw.merge(
+    vasoactive_raw = vasoactive_raw.merge(
         post_transplant_icu[["hospitalization_id", "post_transplant_ICU_in_dttm"]],
         on="hospitalization_id"
     )
 
     # Calculate hours from ICU and create hour bin
-    inotropes_raw["hours_from_icu"] = (
-        (inotropes_raw["admin_dttm"] - inotropes_raw["post_transplant_ICU_in_dttm"])
+    vasoactive_raw["hours_from_icu"] = (
+        (vasoactive_raw["admin_dttm"] - vasoactive_raw["post_transplant_ICU_in_dttm"])
         .dt.total_seconds() / 3600
     )
-    inotropes_raw["hour_bin"] = inotropes_raw["hours_from_icu"].apply(lambda x: int(x) if x >= 0 else -1)
+    vasoactive_raw["hour_bin"] = vasoactive_raw["hours_from_icu"].apply(lambda x: int(x) if x >= 0 else -1)
 
     # Filter to 0-71 hours
-    inotropes_raw = inotropes_raw[(inotropes_raw["hour_bin"] >= 0) & (inotropes_raw["hour_bin"] < 72)]
+    vasoactive_raw = vasoactive_raw[(vasoactive_raw["hour_bin"] >= 0) & (vasoactive_raw["hour_bin"] < 72)]
 
     # Handle MAR action - if "not given" or similar, set dose to 0
-    if "mar_action_category" in inotropes_raw.columns:
-        inotropes_raw["effective_dose"] = np.where(
-            inotropes_raw["mar_action_category"].str.lower().str.contains("not given|held|stopped", na=False),
+    if "mar_action_category" in vasoactive_raw.columns:
+        vasoactive_raw["effective_dose"] = np.where(
+            vasoactive_raw["mar_action_category"].str.lower().str.contains("not given|held|stopped", na=False),
             0,
-            inotropes_raw["med_dose"]
+            vasoactive_raw["med_dose"]
         )
     else:
-        inotropes_raw["effective_dose"] = inotropes_raw["med_dose"]
+        vasoactive_raw["effective_dose"] = vasoactive_raw["med_dose"]
 
-    inotropes_raw[["hospitalization_id", "hour_bin", "med_category", "med_dose", "effective_dose"]].head(20)
-    return (inotropes_raw,)
+    vasoactive_raw[["hospitalization_id", "hour_bin", "med_category", "med_dose", "effective_dose"]].head(20)
+    return (vasoactive_raw,)
 
 
 @app.cell
-def _(inotropes_raw, pd, transplant_hosp_ids):
-    # Create skeleton: all patients x 72 hours x 2 medications
+def _(pd, transplant_hosp_ids, vasoactive_meds, vasoactive_raw):
+    # Create skeleton: all patients x 72 hours x all vasoactive medications
     hours = list(range(72))
-    meds = ["dopamine", "dobutamine"]
 
     skeleton = pd.DataFrame([
         {"hospitalization_id": h, "hour_bin": hr, "med_category": med}
         for h in transplant_hosp_ids
         for hr in hours
-        for med in meds
+        for med in vasoactive_meds
     ])
 
     # Calculate mean effective dose per patient-hour-medication from raw data
     hourly_doses = (
-        inotropes_raw
+        vasoactive_raw
         .groupby(["hospitalization_id", "hour_bin", "med_category"])["effective_dose"]
         .mean()
         .reset_index()
@@ -1023,37 +1035,38 @@ def _(inotropes_raw, pd, transplant_hosp_ids):
 @app.cell
 def _(patient_hourly):
     # Pivot to wide format: one row per patient-hour, columns for each medication
-    inotrope_wide = patient_hourly.pivot_table(
+    vasoactive_wide = patient_hourly.pivot_table(
         index=["hospitalization_id", "hour_bin"],
         columns="med_category",
         values="avg_dose_locf"
     ).reset_index()
 
-    inotrope_wide.columns.name = None
-    inotrope_wide = inotrope_wide.rename(columns={
-        "dopamine": "dopamine_dose",
-        "dobutamine": "dobutamine_dose"
-    })
+    vasoactive_wide.columns.name = None
+    # Add _dose suffix to all medication columns
+    vasoactive_wide.columns = [
+        f"{col}_dose" if col not in ["hospitalization_id", "hour_bin"] else col
+        for col in vasoactive_wide.columns
+    ]
 
-    inotrope_wide
-    return (inotrope_wide,)
+    vasoactive_wide
+    return (vasoactive_wide,)
 
 
 @app.cell
-def _(inotrope_wide, mo, n_patients):
-    n_patients_ino= inotrope_wide["hospitalization_id"].nunique()
-    n_rows = len(inotrope_wide)
-    expected_rows = n_patients * 72
+def _(mo, n_patients, vasoactive_wide):
+    n_patients_vaso = vasoactive_wide["hospitalization_id"].nunique()
+    n_rows_vaso = len(vasoactive_wide)
+    expected_rows_vaso = n_patients * 72
 
     mo.md(f"""
-    ### Imputed Dataset Summary
+    ### Imputed Vasoactive Dataset Summary
 
     | Metric | Value |
     |--------|-------|
-    | Patients | **{n_patients_ino}** |
-    | Rows | **{n_rows}** |
-    | Expected (patients × 72h) | **{expected_rows}** |
-    | Match | **{"✓" if n_rows == expected_rows else "✗"}** |
+    | Patients | **{n_patients_vaso}** |
+    | Rows | **{n_rows_vaso}** |
+    | Expected (patients × 72h) | **{expected_rows_vaso}** |
+    | Match | **{"✓" if n_rows_vaso == expected_rows_vaso else "✗"}** |
     """)
     return
 
